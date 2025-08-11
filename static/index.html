@@ -1,0 +1,204 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HEIC Converter</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .upload-area { border: 2px dashed #ccc; padding: 40px; text-align: center; margin: 20px 0; }
+        .upload-area.dragover { border-color: #007bff; background-color: #f8f9fa; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .progress { background-color: #f0f0f0; border-radius: 5px; margin: 10px 0; }
+        .progress-bar { background-color: #007bff; height: 20px; border-radius: 5px; width: 0%; transition: width 0.3s; }
+        .result { margin: 20px 0; padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🖼️ HEIC Converter</h1>
+    <p>Convert your iPhone HEIC photos to JPEG, PNG, BMP, or WebP format</p>
+    
+    <div class="upload-area" id="uploadArea">
+        <p>📁 Drag & drop HEIC files here or click to select</p>
+        <input type="file" id="fileInput" multiple accept=".heic,.heif" style="display: none;">
+        <button onclick="document.getElementById('fileInput').click()">Choose Files</button>
+    </div>
+    
+    <div>
+        <label>Output Format: </label>
+        <select id="formatSelect">
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="bmp">BMP</option>
+            <option value="webp">WebP</option>
+        </select>
+        
+        <label style="margin-left: 20px;">Quality (JPEG only): </label>
+        <input type="range" id="qualitySlider" min="10" max="100" value="90">
+        <span id="qualityValue">90</span>
+    </div>
+    
+    <button onclick="convertFiles()" id="convertBtn" style="margin: 20px 0;">Convert Files</button>
+    
+    <div id="progress" style="display: none;">
+        <div class="progress">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <p id="progressText">Processing...</p>
+    </div>
+    
+    <div id="result" style="display: none;"></div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const formatSelect = document.getElementById('formatSelect');
+        const qualitySlider = document.getElementById('qualitySlider');
+        const qualityValue = document.getElementById('qualityValue');
+        const convertBtn = document.getElementById('convertBtn');
+        const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const result = document.getElementById('result');
+        
+        let selectedFiles = [];
+        
+        // Quality slider update
+        qualitySlider.oninput = function() {
+            qualityValue.textContent = this.value;
+        }
+        
+        // Drag & drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+        
+        function handleFiles(files) {
+            selectedFiles = Array.from(files).filter(file => 
+                file.name.toLowerCase().endsWith('.heic') || 
+                file.name.toLowerCase().endsWith('.heif')
+            );
+            
+            if (selectedFiles.length > 0) {
+                uploadArea.innerHTML = `<p>✅ ${selectedFiles.length} HEIC files selected</p>`;
+                convertBtn.disabled = false;
+            } else {
+                uploadArea.innerHTML = '<p>❌ No valid HEIC files found</p>';
+                convertBtn.disabled = true;
+            }
+        }
+        
+        async function convertFiles() {
+            if (selectedFiles.length === 0) return;
+            
+            const formData = new FormData();
+            selectedFiles.forEach(file => formData.append('files', file));
+            formData.append('format', formatSelect.value);
+            formData.append('quality', qualitySlider.value);
+            
+            progress.style.display = 'block';
+            result.style.display = 'none';
+            convertBtn.disabled = true;
+            
+            try {
+                if (selectedFiles.length === 1) {
+                    // Single file conversion
+                    const singleFormData = new FormData();
+                    singleFormData.append('file', selectedFiles[0]);
+                    singleFormData.append('format', formatSelect.value);
+                    singleFormData.append('quality', qualitySlider.value);
+                    
+                    const response = await fetch('/convert/single', {
+                        method: 'POST',
+                        body: singleFormData
+                    });
+                    
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `converted.${formatSelect.value}`;
+                        a.click();
+                        
+                        result.innerHTML = '✅ File converted and downloaded!';
+                        result.style.display = 'block';
+                    } else {
+                        throw new Error('Conversion failed');
+                    }
+                } else {
+                    // Batch conversion
+                    const response = await fetch('/convert/batch', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    const jobId = data.job_id;
+                    
+                    // Poll for status
+                    pollStatus(jobId);
+                }
+            } catch (error) {
+                result.innerHTML = '❌ Error: ' + error.message;
+                result.style.display = 'block';
+            }
+            
+            progress.style.display = 'none';
+            convertBtn.disabled = false;
+        }
+        
+        async function pollStatus(jobId) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/status/${jobId}`);
+                    const status = await response.json();
+                    
+                    const percent = (status.completed / status.total) * 100;
+                    progressBar.style.width = percent + '%';
+                    progressText.textContent = `Processing: ${status.completed}/${status.total} files`;
+                    
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        progress.style.display = 'none';
+                        
+                        // Download result
+                        const downloadLink = `/download/${jobId}`;
+                        const a = document.createElement('a');
+                        a.href = downloadLink;
+                        a.download = 'converted_files.zip';
+                        a.click();
+                        
+                        result.innerHTML = '✅ All files converted and downloaded!';
+                        result.style.display = 'block';
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        result.innerHTML = '❌ Conversion failed';
+                        result.style.display = 'block';
+                    }
+                } catch (error) {
+                    clearInterval(interval);
+                    result.innerHTML = '❌ Error checking status';
+                    result.style.display = 'block';
+                }
+            }, 1000);
+        }
+    </script>
+</body>
+</html>
